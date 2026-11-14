@@ -33,19 +33,27 @@ textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:14px;resize
 h2{font-size:15px;margin:0 0 10px}
 .cnt{font-size:12px;color:var(--mu);text-align:right}
 #gate{max-width:340px;margin:18vh auto 0;padding:16px}button.p{background:var(--ac);border-color:var(--ac);color:#fff}
+#phone{max-width:420px;margin:6vh auto 0;padding:16px}#pbtn,#pbtn2{display:block;text-align:center;font-size:18px;padding:16px;border-radius:10px;cursor:pointer;margin-top:10px;border:1px solid var(--bd);color:var(--tx)}#pbtn{background:var(--ac);border-color:var(--ac);color:#fff}#phbox{text-align:center;margin-top:12px}#phqr img{background:#fff;border-radius:8px;max-width:100%;height:auto}
 </style>
 </head>
 <body>
+<div id="phone" hidden><div class="card"><h1>KATM yordamchi</h1>
+<p class="sub">Hujjatni rasmga oling — u kompyuterdagi oynada o’zi paydo bo’ladi.</p>
+<label id="pbtn" for="pcam">Rasmga olish</label><input id="pcam" type="file" accept="image/*" capture="environment" hidden>
+<label id="pbtn2" for="pgal">Galereyadan tanlash</label><input id="pgal" type="file" accept="image/*" hidden>
+<p id="pst" class="m" style="margin:14px 0 0"></p></div></div>
 <div id="gate"><form id="gf" class="card"><h1>KATM yordamchi</h1><label for="gp">Parol</label><input id="gp" type="password" autocomplete="current-password" autofocus><button class="p" style="width:100%;margin-top:10px">Kirish</button><p id="ge" class="r" style="min-height:20px;margin:8px 0 0;font-size:14px"></p></form></div>
 <main hidden>
 <h1>KATM yordamchi</h1>
 <p class="sub">Rasm shu kompyuterdan tashqariga chiqmaydi va saqlanmaydi.</p>
 
 <div class="card">
-<div id="drop" tabindex="0"><b>ID karta:</b> orqa tomonini tashlang (pastida &lt;&lt;&lt; li 3 qator). Yorug’ tushgan bo’lsa, old tomonini ham qo’shing<br><b>Pasport:</b> rasmli sahifasini tashlang<br>Bosib tanlang yoki <b>Ctrl+V</b> bilan qo’ying
+<div id="drop" tabindex="0"><b>ID karta:</b> orqa tomonini tashlang (QR kod va &lt;&lt;&lt; li 3 qator bor tomoni). Yorug’ tushgan bo’lsa, old tomonini ham qo’shing<br><b>Pasport:</b> rasmli sahifasini tashlang<br>Bosib tanlang yoki <b>Ctrl+V</b> bilan qo’ying
 <input id="file" type="file" accept="image/*" multiple hidden></div>
 <div id="prev"></div>
 <p id="st" class="m"></p>
+<button id="ph" type="button" style="width:100%;margin-top:10px">Telefondan rasm olish</button>
+<div id="phbox" hidden><div id="phqr"></div><p id="phst" class="m" style="font-size:14px;margin:8px 0 0"></p></div>
 </div>
 
 <div class="card">
@@ -67,6 +75,7 @@ h2{font-size:15px;margin:0 0 10px}
 <button id="rescan">Qayta o’qish</button> <button id="clr">Tozalash</button>
 </main>
 
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <script>
 (function(){
@@ -425,6 +434,38 @@ function findDoc(src){   // hujjatni rasm ichidan topib, to'g'rilab (qiyshiqligi
   ctx.setTransform(sc2*dx,sc2*nx,sc2*dy,sc2*ny,ow/2-sc2*(X*dx+Y*dy),oh/2-sc2*(X*nx+Y*ny));ctx.drawImage(src,0,0);ctx.setTransform(1,0,0,1,0,0);
   cv.zoom=sc2;return cv;
 }
+/* ---- ID kartaning orqasidagi QR kod: ichida MRZ aniq yozilgan ---- */
+var bdet=null;
+async function qrTry(cv){   // rasm bo'lagidan QR matnini qaytaradi yoki null
+  try{if(window.BarcodeDetector){bdet=bdet||new BarcodeDetector({formats:['qr_code']});var r=await bdet.detect(cv);for(var i=0;i<r.length;i++)if(r[i].rawValue)return r[i].rawValue}}catch(e){}
+  if(!window.jsQR)return null;
+  try{var d=cv.getContext('2d',{willReadFrequently:true}).getImageData(0,0,cv.width,cv.height),q=await Promise.resolve(jsQR(d.data,cv.width,cv.height,{inversionAttempts:'dontInvert'}));return q&&q.data?q.data:null}catch(e){return null}
+}
+function qrLines(t){   // QR matni to'g'ri MRZ bo'lsa, qatorlarini qaytaradi
+  if(!t)return null;
+  var s=splitMrz(t.split(/[\r\n]+/)),r=s[0]?reconcile({},s[1]):null;
+  return r&&r.warnings.length-(r.issueEstimated?1:0)===0?s[1]:null;
+}
+function qrNorm(c){   // soya va yaltirashni tekislaydi (QR kataklari saqlanadi)
+  var w=c.width,h=c.height,x=c.getContext('2d',{willReadFrequently:true}),im=x.getImageData(0,0,w,h),d=im.data,g=new Float32Array(w*h),i,j,v;
+  for(i=0,j=0;i<g.length;i++,j+=4)g[i]=d[j]*.299+d[j+1]*.587+d[j+2]*.114;
+  var k=Math.round(w/14)|1,bg=f2(f2(g,w,h,k,k,1),w,h,k,k,2);
+  for(i=0,j=0;i<g.length;i++,j+=4){v=g[i]/Math.max(bg[i],1)*255;v=v>255?255:v;d[j]=d[j+1]=d[j+2]=v}
+  x.putImageData(im,0,0);return c;
+}
+async function readQR(src){   // butun rasm, keyin kattalashtirilgan bo'laklar
+  if(!window.jsQR&&!window.BarcodeDetector){try{await load1('https://unpkg.com/jsqr@1.4.0/dist/jsQR.js')}catch(e){}}
+  var W=src.width,H=src.height,views=[[0,0,W,H,1400],[0,0,W,H,900,1]],i,j;
+  for(j=0;j<3;j++)for(i=0;i<3;i++)views.push([i*W/4,j*H/4,W/2,H/2,1100]);
+  for(i=0;i<views.length;i++){
+    var v=views[i],k=Math.min(3,v[4]/Math.max(v[2],v[3])),c=document.createElement('canvas');
+    c.width=Math.round(v[2]*k);c.height=Math.round(v[3]*k);
+    var x=c.getContext('2d',{willReadFrequently:true});x.imageSmoothingQuality='high';x.drawImage(src,v[0],v[1],v[2],v[3],0,0,c.width,c.height);
+    if(v[5])qrNorm(c);
+    var l=qrLines(await qrTry(c));if(l)return l;
+  }
+  return null;
+}
 async function loadSrc(file){   // {c: ishlatiladigan rasm, aligned: hujjat topilib to'g'rilanganmi}
   var bm=await createImageBitmap(file),k=Math.min(1,2400/Math.max(bm.width,bm.height)),c=mkCanvas(Math.round(bm.width*k),Math.round(bm.height*k));
   c.getContext('2d').drawImage(bm,0,0,c.width,c.height);
@@ -558,11 +599,15 @@ async function scan(){
   if(busy){again=true;return}
   busy=true;again=false;
   try{
-    var w=await getWorker(),best=null,list=imgs.slice(),small=false,srcs=[],qs=[],i,k;fragF={};
+    var best=null,list=imgs.slice(),small=false,srcs=[],qs=[],i,k,loaded=[];fragF={};
+    say('QR kod qidirilmoqda...');
+    for(i=0;i<list.length&&!best;i++){loaded.push(await loadSrc(list[i]));var ql=await readQR(loaded[i].full);if(ql)best={lines:ql,sc:10,q:null,qr:true}}
+    if(best){var rq=reconcile({},best.lines);fill(rq);say('Tayyor. QR koddan aniq o’qildi, nusxa olishingiz mumkin.','g');busy=false;if(again)scan();return}
+    var w=await getWorker();
     await w.setParameters({tessedit_char_whitelist:WL,tessedit_pageseg_mode:'6'});
     for(i=0;i<list.length;i++){
       say('O’qilmoqda ('+(i+1)+'/'+list.length+')...');
-      var s=await loadSrc(list[i]),m=null;srcs.push(s.full);qs.push(null);
+      var s=loaded[i]||await loadSrc(list[i]),m=null;srcs.push(s.full);qs.push(null);
       if(best&&best.sc>=10)continue;
       m=await findMrz(w,s.full);
       if(!m&&s.aligned){m=await findMrz(w,s.c);if(m)m.q=null;else if(s.c.zoom>=1.8)small=true}   // topilmasa: hujjatni kattalashtirib yana bir marta
@@ -610,14 +655,91 @@ async function scan(){
   if(again)scan();
 }
 
+/* ---- telefondan rasm olish: QR kod orqali telefon va kompyuter to'g'ridan-to'g'ri ulanadi ---- */
+var PEERJS=['https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js','https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js'],QRGEN=['https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js','https://unpkg.com/qrcode-generator@1.4.4/qrcode.js'];
+var TID=new URLSearchParams(location.search).get('t'),peer=null;
+function load1(u){return new Promise(function(res,rej){var s=document.createElement('script');s.src=u;s.onload=res;s.onerror=function(){rej(new Error('yuklanmadi'))};document.head.appendChild(s)})}
+function loadScript(us){return us.reduce(function(p,u){return p.catch(function(){return load1(u)})},Promise.reject())}   // birinchi manzil ishlamasa, keyingisi
+function b64(buf){var u=new Uint8Array(buf),s='',i;for(i=0;i<u.length;i+=0x8000)s+=String.fromCharCode.apply(null,u.subarray(i,i+0x8000));return btoa(s)}
+function unb64(s){var b=atob(s),u=new Uint8Array(b.length),i;for(i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u}
+$('ph').onclick=async function(){   // kompyuter tomoni
+  var st=$('phst');$('phbox').hidden=false;
+  if(peer)return;
+  st.textContent='Ulanmoqda...';st.className='m';
+  try{if(!window.Peer)await loadScript(PEERJS);if(!window.qrcode)await loadScript(QRGEN)}catch(e){st.textContent='Internetga ulanib bo’lmadi. Qayta bosing.';st.className='r';return}
+  peer=new Peer();
+  peer.on('open',function(id){
+    var q=qrcode(0,'M');q.addData(location.origin+location.pathname+'?t='+encodeURIComponent(id));q.make();
+    $('phqr').innerHTML=q.createImgTag(5,12);
+    st.textContent='Telefon kamerasi bilan shu QR kodni skaner qiling.';
+  });
+  peer.on('connection',function(c){
+    var parts=null,total=0,type='image/jpeg';
+    st.textContent='Telefon ulandi. Rasm kutilmoqda...';st.className='g';
+    c.on('data',function(d){   // rasm kichik bo'laklarda keladi
+      if(!d||!d.t)return;
+      if(d.t==='start'){parts=[];total=d.n;type=d.type||'image/jpeg';st.textContent='Rasm kelmoqda...'}
+      else if(d.t==='chunk'&&parts){parts[d.i]=d.d;if(d.i%8===0)st.textContent='Rasm kelmoqda... '+Math.round(100*(d.i+1)/total)+'%'}
+      else if(d.t==='end'&&parts){
+        var okAll=parts.length===total;for(var i=0;i<total&&okAll;i++)if(typeof parts[i]!=='string')okAll=false;
+        if(okAll){
+          addAll([new Blob([unb64(parts.join(''))],{type:type})]);
+          st.textContent='Rasm keldi ('+new Date().toLocaleTimeString()+'). Telefondan yana yuborish mumkin.';
+          try{c.send({ok:1})}catch(e){}
+        }else{st.textContent='Rasm to’liq kelmadi. Telefondan qayta yuboring.';st.className='r';try{c.send({ok:0})}catch(e){}}
+        parts=null;
+      }
+    });
+  });
+  peer.on('disconnected',function(){try{peer.reconnect()}catch(e){}});
+  peer.on('error',function(e){st.textContent='Ulanishda xato ('+(e&&e.type||e)+'). Sahifani yangilab, qayta urinib ko’ring.';st.className='r'});
+};
+if(TID)(function(){   // telefon tomoni: parol so'ralmaydi, faqat rasm yuboradi
+  $('gate').hidden=true;$('phone').hidden=false;
+  var pst=$('pst'),pp=null,conn=null,say2=function(t,c){pst.textContent=t;pst.className=c||'m'};
+  function connect(){return new Promise(function(res,rej){
+    if(conn&&conn.open)return res(conn);
+    var t=setTimeout(function(){rej(new Error('vaqt tugadi'))},25000),go=function(){
+      var c=pp.connect(TID,{reliable:true,serialization:'json'});
+      c.on('open',function(){clearTimeout(t);conn=c;res(c)});
+      c.on('data',function(d){if(!d)return;if(d.ok)say2('Yuborildi ✓ Kompyuterda ko’rinadi. Yana rasm yuborishingiz mumkin.','g');else if(d.ok===0)say2('Rasm to’liq yetib bormadi. Qayta yuboring.','r')});
+      c.on('close',function(){conn=null});
+    };
+    if(!pp){pp=new Peer();pp.on('open',go);pp.on('error',function(e){clearTimeout(t);rej(e)})}else if(pp.open)go();else pp.on('open',go);
+  })}
+  async function small(f){
+    var bm=await createImageBitmap(f),k=Math.min(1,2200/Math.max(bm.width,bm.height)),c=document.createElement('canvas');
+    c.width=Math.round(bm.width*k);c.height=Math.round(bm.height*k);c.getContext('2d').drawImage(bm,0,0,c.width,c.height);
+    return new Promise(function(r){c.toBlob(r,'image/jpeg',.9)});
+  }
+  async function sendFile(inp){
+    var f=inp.files[0];inp.value='';if(!f)return;
+    try{
+      say2('Yuborilmoqda...');
+      var b=await small(f),c=await connect();
+      var s=b64(await b.arrayBuffer()),N=12000,n=Math.ceil(s.length/N),i;
+      c.send({t:'start',n:n,type:'image/jpeg'});
+      for(i=0;i<n;i++){
+        c.send({t:'chunk',i:i,d:s.substr(i*N,N)});
+        if(i%8===7){say2('Yuborilmoqda... '+Math.round(100*(i+1)/n)+'%');await new Promise(function(r){setTimeout(r,30)})}   // kanal to'lib ketmasin
+      }
+      c.send({t:'end'});
+      say2('Yuborildi. Kompyuter javobi kutilmoqda...');
+    }catch(e){say2('Yuborib bo’lmadi ('+(e&&(e.type||e.message)||e)+'). Kompyuterdagi oyna ochiq turganini tekshiring va QR kodni qayta skaner qiling.','r')}
+  }
+  $('pcam').onchange=function(){sendFile(this)};$('pgal').onchange=function(){sendFile(this)};
+  say2('Kompyuterga ulanmoqda...');
+  loadScript(PEERJS).then(connect).then(function(){say2('Kompyuterga ulandi. Rasmga oling.','g')},function(e){say2('Kompyuterga ulanib bo’lmadi ('+(e&&(e.type||e.message)||e)+'). Kompyuterda QR kod oynasi ochiq tursin, keyin qayta skaner qiling.','r')});
+})();
+
 /* ---- parol ---- */
 var PW='35da630b5e9196b2ec4c76281145dd0dda881f87676e29c381ece8342bbf48db';
 function unlock(){$('gate').hidden=true;document.querySelector('main').hidden=false}
 async function sha(t){var b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return [].map.call(new Uint8Array(b),function(x){return('0'+x.toString(16)).slice(-2)}).join('')}
-try{if(localStorage.getItem('katm_ok')===PW)unlock()}catch(e){}
+try{localStorage.removeItem('katm_ok')}catch(e){}   // parol har safar so'raladi
 $('gf').onsubmit=async function(e){
   e.preventDefault();
-  if(await sha($('gp').value)===PW){try{localStorage.setItem('katm_ok',PW)}catch(x){}unlock()}
+  if(await sha($('gp').value)===PW){$('gp').value='';unlock()}
   else{$('ge').textContent='Parol noto’g’ri.';$('gp').value='';$('gp').focus()}
 };
 

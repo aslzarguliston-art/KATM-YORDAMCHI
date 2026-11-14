@@ -42,7 +42,7 @@ h2{font-size:15px;margin:0 0 10px}
 <p class="sub">Rasm shu kompyuterdan tashqariga chiqmaydi va saqlanmaydi.</p>
 
 <div class="card">
-<div id="drop" tabindex="0"><b>ID karta:</b> orqa tomonini tashlang (pastida &lt;&lt;&lt; li 3 qator)<br><b>Pasport:</b> rasmli sahifasini tashlang<br>Bosib tanlang yoki <b>Ctrl+V</b> bilan qo’ying
+<div id="drop" tabindex="0"><b>ID karta:</b> orqa tomonini tashlang (pastida &lt;&lt;&lt; li 3 qator). Yorug’ tushgan bo’lsa, old tomonini ham qo’shing<br><b>Pasport:</b> rasmli sahifasini tashlang<br>Bosib tanlang yoki <b>Ctrl+V</b> bilan qo’ying
 <input id="file" type="file" accept="image/*" multiple hidden></div>
 <div id="prev"></div>
 <p id="st" class="m"></p>
@@ -274,6 +274,7 @@ function reconcile(fr,rawMrz,today){
   var pm=/\d{14}/.exec(pinSrc);
   if(pm&&fpin&&pm[0]!==fpin)warns.push('JSHSHIR old tomonda '+fpin+', MRZ da '+pm[0]+' o’qildi — tekshiring.');
   if(pm)res.pinfl=pm[0];
+  if(res.pinfl.length===14&&cdg(res.pinfl.slice(0,13))!==res.pinfl[13])warns.push('JSHSHIR nazorat raqami mos kelmadi — rasm bilan solishtiring.');
   if(fi&&ed&&fi<ed)res.issue=fDate(fi);
   else if(ed){res.issue=fDate(yearsBack(new Date(ed.getTime()+864e5),10));res.issueEstimated=true;warns.push('Berilgan sana rasmdan o’qilmadi, amal qilish muddatidan hisoblandi (taxminiy).')}
   res.warnings=warns;return res;
@@ -435,7 +436,7 @@ function normLines(l){var s=splitMrz(l);return s[0]?s[1]:null}
 async function findMrz(w,src){   // {lines, sc} yoki null
   var cs=candidates(src,640).concat(candidates(src,360)).sort(function(p,q){return q.sc-p.sc}).slice(0,4),hit=null,reads=[],i,f,l;
   for(i=0;i<cs.length&&!hit;i++)for(f=0;f<2&&!hit;f++){
-    l=findLines((await w.recognize(cropCand(src,cs[i],f,1250))).data.text);
+    var tx=(await w.recognize(cropCand(src,cs[i],f,1250))).data.text;frags(tx);l=findLines(tx);
     if(l&&normLines(l)){hit=[cs[i],f];reads.push(l)}
   }
   if(!hit)return null;
@@ -456,7 +457,68 @@ async function findMrz(w,src){   // {lines, sc} yoki null
     if(li===ni&&pool.length>1&&t[top]<2)doubt=true;
   });
   if(score(out)<score(base)){out=base;doubt=reads.length>1}
-  return{lines:out,sc:score(out),nameDoubt:doubt};
+  var dd=dirOf(hit[0],hit[1]);
+  return{lines:out,sc:score(out),nameDoubt:doubt,q:((Math.round(Math.atan2(dd[1],dd[0])/(Math.PI/2))%4)+4)%4};
+}
+/* ---- zaxira yo'l: kartadagi oddiy yozuvni o'qish (MRZ ga yorug' tushgan bo'lsa) ---- */
+function upright(src,q,max){   // rasmni q*90 gradusga burib tik qiladi
+  var k=Math.min(2,max/Math.max(src.width,src.height)),w=Math.round(src.width*k),h=Math.round(src.height*k),sw=q%2?h:w,sh=q%2?w:h;
+  var cv=mkCanvas(sw,sh),x=cv.getContext('2d');x.imageSmoothingQuality='high';
+  x.translate(sw/2,sh/2);x.rotate(-q*Math.PI/2);x.drawImage(src,-w/2,-h/2,w,h);x.setTransform(1,0,0,1,0,0);
+  return cv;
+}
+var DATE=/\b\d{2}[.,]\d{2}[.,]\d{4}\b/g;
+function parseText(t){   // ID kartadagi yozuvlar tartibi: familiya, ism, otasining ismi, tug'ilgan sana, berilgan sana, amal muddati
+  var f={},L=t.split('\n').map(function(s){return s.trim()}).filter(function(s){return s}),i,m;
+  var ds=(t.match(DATE)||[]).map(function(s){return s.replace(/,/g,'.')}).filter(function(s){return pDate(s)});
+  if(ds.length>=3){f.birth=ds[0];f.issue=ds[1];f.expiry=ds[2]}
+  else if(ds.length===2){var a=pDate(ds[0]),b=pDate(ds[1]);if(Math.abs(b-yearsBack(a,-10))<3*864e5){f.issue=ds[0];f.expiry=ds[1]}else{f.birth=ds[0];f.issue=ds[1]}}
+  else if(ds.length===1)f.birth=ds[0];
+  if((m=/\b([A-Z]{2})\s?(\d{7})\b/.exec(t)))f.docno=m[1]+m[2];
+  if(/\bERKAK\b/.test(t))f.sex='M';else if(/\bAYOL\b/.test(t))f.sex='F';
+  if((m=/(?:^|\D)(\d{14})(?:\D|$)/.exec(t.replace(/(\d) (?=\d)/g,'$1'))))f.pinfl=m[1];
+  var isVal=function(s){return /^[A-Z][A-Z'’‘ʻ` -]{2,}$/.test(s||'')},nx=function(i){return isVal(L[i+1])?L[i+1]:''};
+  for(i=0;i<L.length;i++){
+    if(/patron|otasi/i.test(L[i]))f.patronymic=f.patronymic||nx(i);
+    else if(/surname|famil/i.test(L[i]))f.surname=f.surname||nx(i);
+    else if(/given|ismi/i.test(L[i]))f.name=f.name||nx(i);
+  }
+  if(!f.surname&&!f.name&&ds.length){   // yozuv sarlavhalari o'qilmasa: sanadan oldingi katta harfli qatorlar tartib bo'yicha
+    var up=[];for(i=0;i<L.length&&!DATE.test(L[i]);i++){DATE.lastIndex=0;if(isVal(L[i])&&!/RESPUBLIKA|GUVOHNOMA|REPUBLIC|IDENTITY|BEKIST/.test(L[i]))up.push(L[i])}
+    DATE.lastIndex=0;if(up.length>=2){f.surname=up[0];f.name=up[1]}
+  }
+  return f;
+}
+var fragF={};
+function frags(text){   // MRZ ning ko'ringan bo'laklaridan (yorug' tushmagan qismidan) nazorat raqami to'g'ri chiqqan maydonlarni oladi
+  var F=fragF,D='[0-9OQDILBSZG]';
+  text.split('\n').map(cleanLine).forEach(function(x){
+    var m,i,y=toD(x);
+    if(!F.docno&&(m=new RegExp('UZB([A-Z]{2}'+D+'{7})('+D+')').exec(x))){var d=m[1].slice(0,2)+toD(m[1].slice(2));if(cdg(d)===toD(m[2]))F.docno=d}
+    if(!F.pinfl)(y.match(/\d{14,}/g)||[]).forEach(function(r){for(i=0;i+14<=r.length&&!F.pinfl;i++){var p=r.substr(i,14);
+      if(pinOk(p)&&'3456'.indexOf(p[0])>=0&&mkDate(2000,+p.slice(3,5),+p.slice(1,3)))F.pinfl=p}});
+    if((m=new RegExp('^('+D+'{6})('+D+')(.)('+D+'{6})('+D+')').exec(x))){
+      var b=toD(m[1]),e=toD(m[4]),bd=fromYmd(b,true),ed=fromYmd(e,false);
+      if(!F.birth&&bd&&cdg(b)===toD(m[2]))F.birth=fDate(bd).replace(/-/g,'.');
+      if(!F.expiry&&ed&&cdg(e)===toD(m[5]))F.expiry=fDate(ed).replace(/-/g,'.');
+      if(!F.sex&&(m[3]==='M'||m[3]==='F'))F.sex=m[3];
+    }
+    if(!F.surname&&(m=/^([A-Z]{3,})<<([A-Z]{3,})<{2,}$/.exec(x))&&x.indexOf('UZB')<0){F.surname=m[1];F.name=m[2]}
+  });
+}
+function pinOk(p){return /^\d{14}$/.test(p||'')&&cdg(p.slice(0,13))===p[13]}
+function fixPin(p,b,sex){   // JSHSHIR: 1-raqam asr/jins, 2-7 = KKOOYY, oxirgisi nazorat raqami — shular bilan xato raqam tuzatiladi
+  if(!/^\d{14}$/.test(p||'')||pinOk(p)||!b)return p;
+  var mid=p2(b.getUTCDate())+p2(b.getUTCMonth()+1)+p2(b.getUTCFullYear()%100),c=b.getUTCFullYear()>=2000,
+      first=sex==='M'?[c?'5':'3']:sex==='F'?[c?'6':'4']:(c?['5','6']:['3','4']),ok=[];
+  first.forEach(function(d){var q=d+mid+p.slice(7);if(pinOk(q))ok.push(q)});
+  return ok.length===1?ok[0]:p;
+}
+function buildId(f){   // maydonlardan ID kartaning MRZ sini tuzadi (nazorat raqamlari hisoblanadi)
+  var doc=(f.docno||'').replace(/\s/g,''),b=pDate(f.birth),e=pDate(f.expiry),pin=f.pinfl=fixPin(f.pinfl||'',b,f.sex),sur=bare(cleanName(f.surname)),nam=bare(cleanName(f.name));
+  if(!/^[A-Z]{2}\d{7}$/.test(doc)||!/^\d{14}$/.test(pin)||!b||!e||!sur||!nam)return null;
+  var bs=ymdS(b),es=ymdS(e),l1='IUUZB'+doc+cdg(doc)+pin+'<',l2=bs+cdg(bs)+(pinInfo(pin)[1]||f.sex||'<')+es+cdg(es)+'UZBUZB'+rep(8);
+  return[l1,l2+cdg(l1.slice(5,30)+l2.slice(0,7)+l2.slice(8,15)+l2.slice(18,29)),nameLine(sur,nam,30)];
 }
 async function getWorker(){
   if(worker)return worker;
@@ -496,21 +558,53 @@ async function scan(){
   if(busy){again=true;return}
   busy=true;again=false;
   try{
-    var w=await getWorker(),best=null,list=imgs.slice(),small=false,i;
+    var w=await getWorker(),best=null,list=imgs.slice(),small=false,srcs=[],qs=[],i,k;fragF={};
     await w.setParameters({tessedit_char_whitelist:WL,tessedit_pageseg_mode:'6'});
-    for(i=0;i<list.length&&!(best&&best.sc>=10);i++){
+    for(i=0;i<list.length;i++){
       say('O’qilmoqda ('+(i+1)+'/'+list.length+')...');
-      var s=await loadSrc(list[i]),m=await findMrz(w,s.full);
-      if(!m&&s.aligned){m=await findMrz(w,s.c);if(!m&&s.c.zoom>=1.8)small=true}   // topilmasa: hujjatni kattalashtirib yana bir marta
-      if(m&&(!best||m.sc>best.sc))best=m;
+      var s=await loadSrc(list[i]),m=null;srcs.push(s.full);qs.push(null);
+      if(best&&best.sc>=10)continue;
+      m=await findMrz(w,s.full);
+      if(!m&&s.aligned){m=await findMrz(w,s.c);if(m)m.q=null;else if(s.c.zoom>=1.8)small=true}   // topilmasa: hujjatni kattalashtirib yana bir marta
+      if(m){qs[i]=m.q;if(!best||m.sc>best.sc)best=m}
       if(again){busy=false;return scan()}
     }
-    if(!best){say(small?'Hujjat rasmda juda kichik chiqqan. Yaqinroqdan, hujjat kadrni to’ldiradigan qilib oling.':'MRZ topilmadi. ID kartaning orqa tomonini (pastida “<<<” li 3 qator bor) yoki pasportning rasmli sahifasini aniq qilib tashlang.','r');busy=false;return}
-    var r=reconcile({},best.lines);
-    if(best.nameDoubt)r.warnings.push('Ism-familiya har o’qishda turlicha chiqdi — rasm bilan solishtiring.');
+    var r=best?reconcile({},best.lines):null,note='';
+    if(best&&best.nameDoubt)r.warnings.push('Ism-familiya har o’qishda turlicha chiqdi — rasm bilan solishtiring.');
+    var bad=function(x){return x.warnings.filter(function(t){return t.indexOf('taxminiy')<0}).length};
+    if(!r||(bad(r)&&r.kind==='id')||(!r&&list.length)){   // MRZ o'qilmadi yoki xatosi bor: kartadagi oddiy yozuvlar bilan solishtiramiz
+      if(r)fill(r);
+      say('MRZ aniq o’qilmadi, kartadagi yozuvlar o’qilmoqda...');
+      await w.setParameters({tessedit_char_whitelist:'',tessedit_pageseg_mode:'3'});
+      var F={},known=qs.filter(function(q){return q!==null})[0];for(var fk in fragF)F[fk]=fragF[fk];
+      for(i=0;i<srcs.length;i++){
+        var order=qs[i]!==null?[qs[i]]:(known!==undefined?[known,(known+2)%4,(known+1)%4,(known+3)%4]:[0,1,3,2]);
+        for(k=0;k<order.length;k++){
+          var g=parseText((await w.recognize(upright(srcs[i],order[k],1800))).data.text),n=Object.keys(g).length;
+          for(var z in g)if(!F[z])F[z]=g[z];
+          if(n>=2||qs[i]!==null)break;
+        }
+        if(again){busy=false;return scan()}
+      }
+      if(pinOk(F.pinfl)){   // JSHSHIR ichida tug'ilgan sana va jins bor
+        var pi=pinInfo(F.pinfl),pb=fromYmd(pi[0],true);
+        if(!F.birth&&pb){pb=mkDate(('56'.indexOf(F.pinfl[0])>=0?2000:1900)+(+pi[0].slice(0,2)),+pi[0].slice(2,4),+pi[0].slice(4,6));if(pb)F.birth=fDate(pb).replace(/-/g,'.')}
+        if(!F.sex)F.sex=pi[1];
+      }
+      if(best){
+        var r2=reconcile(F,best.lines);
+        if(bad(r2)<=bad(r)){r=r2;if(best.nameDoubt&&!(F.surname&&F.name))r.warnings.push('Ism-familiya har o’qishda turlicha chiqdi — rasm bilan solishtiring.')}
+      }else{
+        var bl=buildId(F);
+        if(bl){r=reconcile(F,bl);r.warnings.unshift('MRZ rasmdan o’qilmadi (yorug’ tushgan yoki xira) — u kartadagi yozuvlardan tuzildi. Rasm bilan solishtiring.')}
+        else if(Object.keys(F).length){   // MRZ ni tuzishga ma'lumot yetmadi: topilganini ko'rsatamiz
+          r=reconcile(F,[]);r.warnings=['MRZ o’qilmadi va uni tuzish uchun ma’lumot yetmadi. Topilgan maydonlar to’ldirildi, qolganini qo’lda kiriting. ID kartaning old va orqa tomonini yorug’ tushmaydigan qilib qayta oling.'];
+        }
+      }
+    }
+    if(!r){say(small?'Hujjat rasmda juda kichik chiqqan. Yaqinroqdan, hujjat kadrni to’ldiradigan qilib oling.':'O’qib bo’lmadi. ID kartaning orqa tomonini (pastida “<<<” li 3 qator bor) yoki pasportning rasmli sahifasini yorug’ tushmaydigan qilib tashlang.','r');busy=false;return}
     fill(r);
-    var bad=r.warnings.filter(function(x){return x.indexOf('taxminiy')<0}).length;
-    say(bad?'Tayyor, lekin pastdagi ogohlantirishlarni tekshiring.':'Tayyor. Nusxa olishingiz mumkin.',bad?'r':'g');
+    say(bad(r)?'Tayyor, lekin pastdagi ogohlantirishlarni tekshiring.':'Tayyor. Nusxa olishingiz mumkin.',bad(r)?'r':'g');
   }catch(e){say('O’qib bo’lmadi: '+(e&&e.message||e)+'. Internetni tekshiring (birinchi marta kerak).','r')}
   busy=false;
   if(again)scan();
